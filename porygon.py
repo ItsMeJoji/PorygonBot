@@ -106,8 +106,8 @@ class MyComponent(commands.Component):
     # You can use Components within modules for a more organized codebase and hot-reloading.
 
     def __init__(self, bot: Bot) -> None:
-
         self.bot = bot
+        self.active_chatters: set[str] = set()
 
     @commands.Component.listener()
     async def event_message(self, payload) -> None:
@@ -135,6 +135,10 @@ class MyComponent(commands.Component):
         if "porygon" in payload.text.lower() and random.randint(1, 10) == 1:
             await payload.respond("NOTICE: Superior Entity Mentioned!")
 
+        """Blastoise Mentioned? Notify with a 1 in 10 chance"""
+        if "blastoise" in payload.text.lower() and random.randint(1, 10) == 1:
+            await payload.respond("NOTICE: Big Man Blastoise Mentioned!")
+
         """Lag Detected? Always notify."""
         lagTerms = ["lag", "lagging", "lagged"]
         if any(term in payload.text.lower() for term in lagTerms) and random.randint(1, 10) == 1:
@@ -148,7 +152,10 @@ class MyComponent(commands.Component):
         # print(any(word in greetingTerms for word in parsedMessage if ' ' not in word))
 
         if any(term in payload.text.lower() for term in greetingTerms if ' ' in term) or any(word in greetingTerms for word in parsedMessage if ' ' not in word):
-            await payload.respond(f"GREETING: Hello {payload.chatter.name}! Welcome to the stream, hope you enjoy your time here! itsmej18Love")
+            if payload.chatter.name not in self.active_chatters:
+                await payload.respond(f"GREETING: Hello {payload.chatter.name}! Welcome to the stream, hope you enjoy your time here! itsmej18Love")
+
+        self.active_chatters.add(payload.chatter.name)
 
     @commands.command()
     async def porygonbot(self, ctx: commands.Context) -> None:
@@ -209,6 +216,36 @@ class MyComponent(commands.Component):
         else:
             await ctx.send(f"RESULT: {ctx.chatter.name} rolled {shinyRoll}!")
 
+    @commands.command()
+    async def bingo(self, ctx: commands.Context) -> None:
+        """A command that gives the current bingo link.
+
+        !bingo
+        """
+        async with self.bot.token_database.acquire() as connection:
+            row = await connection.fetchone("SELECT value FROM config WHERE key = 'bingo'")
+            if row:
+                await ctx.send(f"NOTICE: The current Bingo Link is: {row['value']}")
+            else:
+                await ctx.send("ERROR: No Bingo Link has been set yet.")
+
+    @commands.command()
+    async def setbingo(self, ctx: commands.Context, *, link: str) -> None:
+        """A command that updates the bingo link. Only usable by the owner.
+
+        !setbingo <link>
+        """
+        if str(ctx.author.id) != self.bot.owner_id:
+            return
+
+        async with self.bot.token_database.acquire() as connection:
+            await connection.execute(
+                "INSERT INTO config (key, value) VALUES ('bingo', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (link,)
+            )
+
+        await ctx.send(f"NOTICE: Bingo Link has been updated to: {link}")
+
 
 async def setup_database(db: asqlite.Pool) -> tuple[list[tuple[str, str]], list[eventsub.SubscriptionPayload]]:
     # Create our token table, if it doesn't exist..
@@ -216,8 +253,14 @@ async def setup_database(db: asqlite.Pool) -> tuple[list[tuple[str, str]], list[
     # This is just for example purposes...
 
     query = """CREATE TABLE IF NOT EXISTS tokens(user_id TEXT PRIMARY KEY, token TEXT NOT NULL, refresh TEXT NOT NULL)"""
+    config_query = """CREATE TABLE IF NOT EXISTS config(key TEXT PRIMARY KEY, value TEXT NOT NULL)"""
+    
     async with db.acquire() as connection:
         await connection.execute(query)
+        await connection.execute(config_query)
+
+        # Seed default bingo link if not exists
+        await connection.execute("INSERT OR IGNORE INTO config (key, value) VALUES ('bingo', 'https://bingo.itsmejoji.com')")
 
         # Fetch any existing tokens...
         rows: list[sqlite3.Row] = await connection.fetchall("""SELECT * from tokens""")

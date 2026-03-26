@@ -17,6 +17,8 @@ PorygonBot is an automated Twitch chat assistant designed to enhance stream inte
 - `!socials`: Get links to the streamer's social media.
 - `!discord`: Get the Discord invite link.
 - `!shinyroll`: Roll a number from 1 to 8192 to see if you find a "shiny".
+- `!bingo`: Get the current bingo link.
+- `!setbingo <link>`: (Owner only) Update the bingo link.
 
 ## Setup
 

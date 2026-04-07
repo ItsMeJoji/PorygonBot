@@ -46,6 +46,7 @@ def glitch_text(text: str) -> str:
 class Bot(commands.AutoBot):
     def __init__(self, *, token_database: asqlite.Pool, subs: list[eventsub.SubscriptionPayload]) -> None:
         self.token_database = token_database
+        self.initial_subs_count = len(subs)
 
         super().__init__(
             client_id=CLIENT_ID,
@@ -55,10 +56,39 @@ class Bot(commands.AutoBot):
             prefix="!",
             subscriptions=subs,
             force_subscribe=True,
+            redirect_uri="http://localhost:4343/oauth/callback",
+            scopes=["user:read:chat", "user:write:chat", "user:bot"],
         )
 
     async def setup_hook(self) -> None:
+        print("SETTING UP: Adding MyComponent...")
         await self.add_component(MyComponent(self))
+
+    async def event_ready(self) -> None:
+        LOGGER.info("Successfully logged in as: %s", self.bot_id)
+        print(f"BOT READY: {self.initial_subs_count} initial subscriptions.", flush=True)
+
+        if self.initial_subs_count == 0:
+            try:
+                # In TwitchIO 3.1.0, we use the Scopes helper and the adapter
+                scopes = twitchio.Scopes(
+                    user_read_chat=True,
+                    user_write_chat=True,
+                    channel_bot=True
+                )
+                auth_url = self.adapter.get_authorization_url(scopes=scopes)
+                
+                print("\n" + "="*50, flush=True)
+                print("NO ACTIVE SUBSCRIPTIONS FOUND!", flush=True)
+                print("Please authorize the bot to read messages in your channel:", flush=True)
+                print(f"{auth_url}", flush=True)
+                print("="*50 + "\n", flush=True)
+            except Exception as e:
+                print(f"EXCEPTION generating Auth URL: {e}", flush=True)
+
+    async def event_error(self, payload: twitchio.payloads.EventErrorPayload) -> None:
+        # In TwitchIO 3.x, event_error receives an EventErrorPayload
+        print(f"ERROR EVENT: {payload.event} | Message: {payload.message} | Error: {payload.error}", flush=True)
 
     async def event_oauth_authorized(self, payload: twitchio.authentication.UserTokenPayload) -> None:
         await self.add_token(payload.access_token, payload.refresh_token)
@@ -98,24 +128,27 @@ class Bot(commands.AutoBot):
         LOGGER.info("Added token to the database for user: %s", resp.user_id)
         return resp
 
-    async def event_ready(self) -> None:
-        LOGGER.info("Successfully logged in as: %s", self.bot_id)
 
 # Component containing commands
 class MyComponent(commands.Component):
     # You can use Components within modules for a more organized codebase and hot-reloading.
 
     def __init__(self, bot: Bot) -> None:
+        print("COMPONENT INITIALIZING: MyComponent")
         self.bot = bot
         self.active_chatters: set[str] = set()
 
     @commands.Component.listener()
-    async def event_message(self, payload) -> None:
+    async def event_chat_message(self, payload: twitchio.ChatMessage) -> None:
 
         bot = self.bot
+        print(f"COMPONENT EVENT: {payload.chatter.name}: {payload.text}", flush=True)
 
-        if payload.chatter == bot.user:
+        if payload.chatter.id == bot.bot_id:
             return
+
+        # Explicitly handle commands
+        await bot.handle_commands(payload)
 
         """For Logging Purposes."""
         print(f"[{payload.broadcaster.name}] - {payload.chatter.name}: {payload.text}")
@@ -248,6 +281,7 @@ class MyComponent(commands.Component):
 
 
 async def setup_database(db: asqlite.Pool) -> tuple[list[tuple[str, str]], list[eventsub.SubscriptionPayload]]:
+    print("DATABASE SETUP STARTING...", flush=True)
     # Create our token table, if it doesn't exist..
     # You should add the created files to .gitignore or potentially store them somewhere safer
     # This is just for example purposes...
@@ -269,13 +303,17 @@ async def setup_database(db: asqlite.Pool) -> tuple[list[tuple[str, str]], list[
         subs: list[eventsub.SubscriptionPayload] = []
 
         for row in rows:
+            print(f"DATABASE: Found token for user {row['user_id']}")
             tokens.append((row["token"], row["refresh"]))
 
             if row["user_id"] == BOT_ID:
+                print(f"DATABASE: Skipping subscription for bot ID {BOT_ID}")
                 continue
 
+            print(f"DATABASE: Adding subscription for broadcaster {row['user_id']}", flush=True)
             subs.extend([eventsub.ChatMessageSubscription(broadcaster_user_id=row["user_id"], user_id=BOT_ID)])
 
+    print(f"DATABASE SETUP COMPLETE: {len(tokens)} tokens, {len(subs)} subscriptions.", flush=True)
     return tokens, subs
 
 

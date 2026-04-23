@@ -1,24 +1,26 @@
 # PorygonBot - Twitch Chat Bot
 
-PorygonBot is an automated Twitch chat assistant designed to enhance stream interaction with unique features and interactive commands.
+PorygonBot is a Twitch chat bot with a few automated responses and some simple chat commands.
 
 ## Features
 
-- **Automated Greetings**: Greets chatters when they say hello or a similar phrase.
-- **Lag Monitoring**: Automatically detects "lag" mentions and alerts the streamer.
-- **Superior Entity Recognition**: Responds to any mention of "Porygon".
-- **Message Integrity Audits**: Occasionally garbles messages to simulate "errors" in transmission.
+- **Automated Greetings**: Greets chatters when they say hello or something similar.
+- **Lag Monitoring**: Watches for "lag" mentions and alerts the streamer.
+- **Porygon Mentions**: Replies to mentions of "Porygon".
+- **Message Garbling**: Occasionally scrambles a message for fun.
+- **Periodic Chat Messages**: Sends timed promotional messages from a JSON config file.
 - **Mini-games**: Includes a `!shinyroll` command to test your luck against standard shiny odds (1 in 8192).
 
 ## Commands
 
-- `!porygonbot`: Introduction to the bot.
-- `!lurk`: Acknowledge that you are lurking.
-- `!socials`: Get links to the streamer's social media.
-- `!discord`: Get the Discord invite link.
-- `!shinyroll`: Roll a number from 1 to 8192 to see if you find a "shiny".
-- `!bingo`: Get the current bingo link.
+- `!porygonbot`: Prints a short bot intro.
+- `!lurk`: Acknowledges that you are lurking.
+- `!socials`: Shows the streamer's social links.
+- `!discord`: Shows the Discord invite link.
+- `!shinyroll`: Rolls a number from 1 to 8192.
+- `!bingo`: Shows the current bingo link.
 - `!setbingo <link>`: (Owner only) Update the bingo link.
+- `!reloadpromos`: (Owner only) Reload the periodic message config file without restarting.
 
 ## Setup
 
@@ -45,14 +47,37 @@ TWITCH_CLIENT_ID=your_client_id
 TWITCH_CLIENT_SECRET=your_client_secret
 ```
 
-*Note: `BOT_ID` and `OWNER_ID` are currently configured in `porygon.py`.*
+*Note: `BOT_ID` and `OWNER_ID` are set in `porygon.py`.*
+
+### Periodic Messages
+
+The bot reads periodic chat messages from [`promo_messages.json`](./promo_messages.json).
+
+A typical entry looks like this:
+
+```json
+{
+  "name": "socials",
+  "interval_minutes": 30,
+  "messages": [
+    "NOTICE: You can find all socials here: https://itsmejoji.com"
+  ],
+  "randomize": false
+}
+```
+
+- `interval_minutes` controls how often the message is sent.
+- `messages` can be a single message or a list of messages.
+- `randomize` picks a random message from the list when `true`.
+
+After editing the file, restart the bot or use `!reloadpromos` to reload it without restarting.
 
 ### Running the Bot
 
-Start the bot by running:
+Run the bot with:
 
 ```powershell
 python porygon.py
 ```
 
-The bot will automatically manage tokens in a local `tokens.db` file.
+The bot stores tokens in a local `tokens.db` file.

@@ -1,0 +1,28 @@
+{
+  "periodic_messages": [
+    {
+      "name": "socials",
+      "interval_minutes": 30,
+      "messages": [
+        "NOTICE: You can find all socials here: https://itsmejoji.com"
+      ],
+      "randomize": false
+    },
+    {
+      "name": "discord",
+      "interval_minutes": 45,
+      "messages": [
+        "NOTICE: Join the Discord! https://discord.gg/N3QAw5ECSq"
+      ],
+      "randomize": false
+    },
+    {
+      "name": "docket",
+      "interval_minutes": 60,
+      "messages": [
+        "NOTICE: Today's Docket can be found here: https://itsmejoji.github.io/StreamAssets/docket.html"
+      ],
+      "randomize": false
+    }
+  ]
+}

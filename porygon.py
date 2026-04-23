@@ -5,12 +5,14 @@ This bot can be restarted as many times without needing to subscribe or worry ab
 - Subscriptions last 72 hours after the bot is disconnected and refresh when the bot starts.
 
 """
+import json
 import os
 import re
 import asyncio
 import logging
 import random
 import string
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import asqlite
@@ -18,6 +20,7 @@ import asqlite
 import twitchio
 from twitchio import eventsub
 from twitchio.ext import commands
+from twitchio.user import PartialUser, User
 
 
 if TYPE_CHECKING:
@@ -26,7 +29,6 @@ if TYPE_CHECKING:
 
 LOGGER: logging.Logger = logging.getLogger("Bot")
 
-# Consider using a .env or another form of Configuration file!
 CLIENT_ID: str = os.getenv('TWITCH_CLIENT_ID')  # The CLIENT ID from the Twitch Dev Console
 CLIENT_SECRET: str = os.getenv('TWITCH_CLIENT_SECRET')  # The CLIENT SECRET from the Twitch Dev Console
 BOT_ID = "1388303571"  # The Account ID of the bot user...
@@ -34,6 +36,7 @@ OWNER_ID = "68184174"  # Your personal User ID..
 
 # Characters to use for garbling text
 GARBLE_CHARS = string.ascii_letters + string.digits + "!@#$%^&*()_+=-,/?<>:;|\\[]{}"
+PROMO_CONFIG_PATH = Path(__file__).with_name("promo_messages.json")
 
 def glitch_text(text: str) -> str:
     """Replaces each character in a string with a random garbled character."""
@@ -41,6 +44,43 @@ def glitch_text(text: str) -> str:
     for _ in text:
         garbled_message += random.choice(GARBLE_CHARS)
     return garbled_message
+
+
+def _normalize_promo_entry(entry: object, *, index: int) -> dict[str, object] | None:
+    """Validate a periodic message entry from the JSON config."""
+    if not isinstance(entry, dict):
+        LOGGER.warning("Skipping promo entry %s because it is not an object.", index + 1)
+        return None
+
+    interval = entry.get("interval_minutes")
+    messages = entry.get("messages")
+
+    if not isinstance(interval, (int, float)) or interval <= 0:
+        LOGGER.warning("Skipping promo entry %s because interval_minutes is invalid.", index + 1)
+        return None
+
+    if isinstance(messages, str):
+        normalized_messages = [messages.strip()]
+    elif isinstance(messages, list):
+        normalized_messages = [str(message).strip() for message in messages]
+    else:
+        LOGGER.warning("Skipping promo entry %s because messages is invalid.", index + 1)
+        return None
+
+    normalized_messages = [message for message in normalized_messages if message]
+    if not normalized_messages:
+        LOGGER.warning("Skipping promo entry %s because it has no usable messages.", index + 1)
+        return None
+
+    name = entry.get("name") or f"promo-{index + 1}"
+    randomize = bool(entry.get("randomize", True))
+
+    return {
+        "name": str(name),
+        "interval_minutes": float(interval),
+        "messages": normalized_messages,
+        "randomize": randomize,
+    }
 
 # Our main Bot class
 class Bot(commands.AutoBot):
@@ -137,6 +177,111 @@ class MyComponent(commands.Component):
         print("COMPONENT INITIALIZING: MyComponent")
         self.bot = bot
         self.active_chatters: set[str] = set()
+        self._promo_config_path = PROMO_CONFIG_PATH
+        self._promo_tasks: list[asyncio.Task[None]] = []
+        self._promo_entries: list[dict[str, object]] = []
+
+    def _get_broadcaster(self) -> PartialUser | User | None:
+        if self.bot.owner is not None:
+            return self.bot.owner
+
+        if not self.bot.owner_id:
+            return None
+
+        return PartialUser(id=self.bot.owner_id, http=self.bot._http)
+
+    def _load_promo_entries(self) -> list[dict[str, object]]:
+        if not self._promo_config_path.exists():
+            LOGGER.warning("Promo config file not found at %s", self._promo_config_path)
+            return []
+
+        try:
+            raw_config = json.loads(self._promo_config_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            LOGGER.error("Failed to parse promo config %s: %s", self._promo_config_path, exc)
+            return []
+        except OSError as exc:
+            LOGGER.error("Failed to read promo config %s: %s", self._promo_config_path, exc)
+            return []
+
+        if isinstance(raw_config, dict):
+            entries = raw_config.get("periodic_messages", [])
+        elif isinstance(raw_config, list):
+            entries = raw_config
+        else:
+            LOGGER.error("Promo config must be a list or a dict containing 'periodic_messages'.")
+            return []
+
+        if not isinstance(entries, list):
+            LOGGER.error("Promo config 'periodic_messages' must be a list.")
+            return []
+
+        normalized_entries: list[dict[str, object]] = []
+        for index, entry in enumerate(entries):
+            normalized_entry = _normalize_promo_entry(entry, index=index)
+            if normalized_entry is not None:
+                normalized_entries.append(normalized_entry)
+
+        return normalized_entries
+
+    async def _stop_promo_tasks(self) -> None:
+        if not self._promo_tasks:
+            return
+
+        tasks = list(self._promo_tasks)
+        self._promo_tasks.clear()
+
+        for task in tasks:
+            task.cancel()
+
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def _run_promo_entry(self, entry: dict[str, object]) -> None:
+        await self.bot.wait_until_ready()
+
+        name = str(entry["name"])
+        interval_seconds = float(entry["interval_minutes"]) * 60.0
+        messages = [str(message) for message in entry["messages"]]
+        randomize = bool(entry.get("randomize", True))
+
+        LOGGER.info("Starting promo task '%s' every %s minutes.", name, entry["interval_minutes"])
+
+        try:
+            while True:
+                await asyncio.sleep(interval_seconds)
+
+                message = random.choice(messages) if randomize else messages[0]
+                if len(message) > 500:
+                    LOGGER.warning("Skipping promo task '%s' because the message exceeds Twitch's 500 character limit.", name)
+                    continue
+
+                broadcaster = self._get_broadcaster()
+                if broadcaster is None:
+                    LOGGER.warning("Skipping promo task '%s' because the broadcaster could not be resolved.", name)
+                    continue
+
+                try:
+                    await broadcaster.send_message(message=message, sender=self.bot.bot_id)
+                    LOGGER.info("Sent promo task '%s' message.", name)
+                except Exception as exc:
+                    LOGGER.exception("Failed to send promo task '%s' message: %s", name, exc)
+        except asyncio.CancelledError:
+            LOGGER.info("Promo task '%s' stopped.", name)
+            raise
+
+    async def _reload_promo_tasks(self) -> None:
+        await self._stop_promo_tasks()
+        self._promo_entries = self._load_promo_entries()
+
+        for entry in self._promo_entries:
+            task = asyncio.create_task(self._run_promo_entry(entry))
+            self._promo_tasks.append(task)
+
+    async def component_load(self) -> None:
+        await self._reload_promo_tasks()
+
+    async def component_teardown(self) -> None:
+        await self._stop_promo_tasks()
 
     @commands.Component.listener()
     async def event_chat_message(self, payload: twitchio.ChatMessage) -> None:
@@ -278,6 +423,26 @@ class MyComponent(commands.Component):
             )
 
         await ctx.send(f"NOTICE: Bingo Link has been updated to: {link}")
+
+    @commands.command()
+    async def docket(self, ctx: commands.Context) -> None:
+        """A command that gives the current docket link.
+
+        !docket
+        """
+        await ctx.send("NOTICE: Today's Docket can be found here: https://itsmejoji.github.io/StreamAssets/docket.html")
+
+    @commands.command()
+    async def reloadpromos(self, ctx: commands.Context) -> None:
+        """Reload the periodic message config file.
+
+        !reloadpromos
+        """
+        if str(ctx.author.id) != self.bot.owner_id:
+            return
+
+        await self._reload_promo_tasks()
+        await ctx.send("NOTICE: Periodic message config reloaded.")
 
 
 async def setup_database(db: asqlite.Pool) -> tuple[list[tuple[str, str]], list[eventsub.SubscriptionPayload]]:
